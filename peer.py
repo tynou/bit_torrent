@@ -2,6 +2,7 @@ import asyncio
 import struct
 from piece_manager import BLOCK_SIZE, PieceManager
 from torrent import Torrent
+import random
 
 
 class PeerConnection:
@@ -12,7 +13,7 @@ class PeerConnection:
         ip: str,
         port: int,
         peer_id: str,
-        info_hash: str,
+        info_hash: bytes,
     ):
         self.torrent = torrent
         self.piece_manager = piece_manager
@@ -25,6 +26,7 @@ class PeerConnection:
         self.remote_peer_id = None
         self.is_choking = True  # Пир "душит" нас (не дает качать)
         self.is_interested = False  # Мы заинтересованы в пире
+        self.random_id = "".join(random.choice("0123456789") for _ in range(12))
 
     async def connect(self):
         try:
@@ -67,6 +69,7 @@ class PeerConnection:
         self.is_interested = True
 
     async def request_piece(self, piece_index, offset, length):
+        # print(f"Пир {self.random_id} хочет {piece_index}[{offset}:{offset + length}]")
         msg = struct.pack(">IbIII", 13, 6, piece_index, offset, length)
         self.writer.write(msg)
         await self.writer.drain()
@@ -96,6 +99,7 @@ class PeerConnection:
                     index, begin = struct.unpack(">II", msg_data[1:9])
                     block_data = msg_data[9:]
                     self.piece_manager.block_received(index, begin, block_data)
+                    # print(f"Пир {self.random_id} получил кусок от части {index}")
                 # print(msg_id, self.piece_manager.total_downloaded)
 
                 # После unchoke, если мы заинтересованы, запрашиваем следующую часть

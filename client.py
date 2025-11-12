@@ -64,16 +64,12 @@ class TorrentClient:
     async def _manage_peer(self, peer: PeerConnection, download: Download):
         if not await peer.connect():
             return
-        # print(">")
         if not await peer.perform_handshake():
             return
 
-        # print(">>")
         download.peers.append(peer)
         await peer.send_interested()
-        # print(">>>")
         await peer.message_loop()
-        # print(">>>>")
 
         # Удаляем пира из списка активных после отключения
         if peer in download.peers:
@@ -82,7 +78,6 @@ class TorrentClient:
     async def run(self):
         """Основной цикл для отображения статуса."""
         while True:
-            # break
             os.system("cls" if os.name == "nt" else "clear")
             print("--- Python BitTorrent Client ---")
             if not self.downloads:

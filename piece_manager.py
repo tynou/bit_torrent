@@ -1,9 +1,11 @@
 import os
 import math
 import hashlib
+import time
 from torrent import Torrent
 
 BLOCK_SIZE = 2**14  # 16 KB - стандартный размер блока для запроса
+REQUEST_TIMEOUT = 5
 
 
 class Piece:
@@ -12,16 +14,45 @@ class Piece:
         self.length = length
         self.hash_value = hash_value
         self.blocks = [False] * math.ceil(length / BLOCK_SIZE)
+        self.requested_blocks = [0] * math.ceil(length / BLOCK_SIZE)
         self.data = bytearray(length)
         self.num_blocks_received = 0
 
-    def add_block(self, offset, block_data):
+    def add_block(self, offset: int, block_data: bytes):
         block_index = offset // BLOCK_SIZE
         if not self.blocks[block_index]:
             self.blocks[block_index] = True
+            self.requested_blocks[block_index] = 0
             start = offset % self.length
             self.data[start : start + len(block_data)] = block_data
             self.num_blocks_received += 1
+
+    def mark_block_requested(self, block_index: int):
+        self.requested_blocks[block_index] = int(time.time())
+
+    def is_block_available(self, block_index: int):
+        if self.blocks[block_index]:
+            return False
+
+        requested_time = self.requested_blocks[block_index]
+        if requested_time == 0 or time.time() - requested_time > REQUEST_TIMEOUT:
+            return True
+
+        return False
+
+    def get_timed_out_blocks(self):
+        timed_out_blocks = []
+        current_time = time.time()
+
+        for block_index, requested_time in enumerate(self.requested_blocks):
+            if (
+                requested_time != 0
+                and not self.blocks[block_index]
+                and current_time - requested_time > REQUEST_TIMEOUT
+            ):
+                timed_out_blocks.append(block_index)
+
+        return timed_out_blocks
 
     def is_complete(self):
         return all(self.blocks)
@@ -71,54 +102,65 @@ class PieceManager:
             ]
 
     def get_next_request(self, peer):
+        for piece_index in list(self.pending_pieces.keys()):
+            piece = self.pending_pieces[piece_index]
+            timed_out_blocks = piece.get_timed_out_blocks()
+
+            if timed_out_blocks:
+                print("BLOCK TIMED OUT")
+                # Берем первый блок с истекшим таймаутом
+                block_index = timed_out_blocks[0]
+                piece_length = self._get_piece_length(piece_index)
+                offset = block_index * BLOCK_SIZE
+                length = min(BLOCK_SIZE, piece_length - offset)
+
+                # Помечаем блок как запрошенный заново
+                piece.mark_block_requested(block_index)
+                return (piece_index, offset, length)
+
         # Простая стратегия: запрашиваем первую доступную часть
-        # print(
-        #     self.torrent.num_pieces,
-        #     len(self.pending_pieces.values()),
-        #     self.total_downloaded,
-        # )
         for piece_index in self.missing_pieces:
-            # print(1)
             piece_length = self._get_piece_length(piece_index)
             if piece_index not in self.pending_pieces:
-                # print(2)
                 self.pending_pieces[piece_index] = Piece(
                     piece_index, piece_length, self.torrent.pieces_hashes[piece_index]
                 )
 
+            piece = self.pending_pieces[piece_index]
+
             # Запрашиваем первый блок этой части
-            for block_index, received in enumerate(
-                self.pending_pieces[piece_index].blocks
-            ):
-                if not received:
+            for block_index in range(len(piece.blocks)):
+                if piece.is_block_available(block_index):
                     offset = block_index * BLOCK_SIZE
                     length = min(BLOCK_SIZE, piece_length - offset)
-                    return (piece_index, offset, length)
 
-        # for piece_index in self.missing_pieces:
-        #     if piece_index not in self.pending_pieces:
-        #         piece_length = self._get_piece_length(piece_index)
-        #         self.pending_pieces[piece_index] = Piece(
-        #             piece_index, piece_length, self.torrent.pieces_hashes[piece_index]
-        #         )
+                    # Помечаем блок как запрошенный
+                    piece.mark_block_requested(block_index)
+                    return (piece_index, offset, length)
         return None
 
-    def block_received(self, piece_index, offset, data):
+    def block_received(self, piece_index: int, offset: int, data: bytes):
         if piece_index in self.pending_pieces:
             piece = self.pending_pieces[piece_index]
-            piece.add_block(offset, data)
-            self.total_downloaded += len(data)
 
-            if piece.is_complete():
-                if piece.is_hash_valid():
-                    self._write_piece_to_disk(piece)
-                    self.have_pieces[piece_index] = True
-                    self.missing_pieces.remove(piece_index)
-                    del self.pending_pieces[piece_index]
-                    print(f"\nЧасть {piece_index} успешно скачана и проверена.")
-                else:
-                    print(f"\nОшибка хэша для части {piece_index}. Повторная загрузка.")
-                    del self.pending_pieces[piece_index]
+            # Проверяем, не получен ли уже этот блок
+            block_index = offset // BLOCK_SIZE
+            if not piece.blocks[block_index]:
+                piece.add_block(offset, data)
+                self.total_downloaded += len(data)  # Считаем только новые блоки
+
+                if piece.is_complete():
+                    if piece.is_hash_valid():
+                        self._write_piece_to_disk(piece)
+                        self.have_pieces[piece_index] = True
+                        self.missing_pieces.remove(piece_index)
+                        del self.pending_pieces[piece_index]
+                        print(f"\nЧасть {piece_index} успешно скачана и проверена.")
+                    else:
+                        print(
+                            f"\nОшибка хэша для части {piece_index}. Повторная загрузка."
+                        )
+                        del self.pending_pieces[piece_index]
             return True
         return False
 
