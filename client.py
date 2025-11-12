@@ -2,10 +2,7 @@ import asyncio
 import sys
 import os
 from torrent import Torrent
-from tracker import Tracker
-from piece_manager import PieceManager
 from peer import PeerConnection
-from dataclasses import dataclass, field
 from download import Download, DownloadStatus
 
 MAX_PEERS = 40

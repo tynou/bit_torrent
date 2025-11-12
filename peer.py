@@ -1,6 +1,6 @@
 import asyncio
 import struct
-from piece_manager import BLOCK_SIZE, PieceManager
+from piece_manager import PieceManager
 from torrent import Torrent
 import random
 
@@ -35,7 +35,7 @@ class PeerConnection:
             )
             return True
         except (asyncio.TimeoutError, ConnectionRefusedError, OSError) as e:
-            # print(f"Не удалось подключиться к {self.ip}:{self.port}: {e}")
+            print(f"Не удалось подключиться к {self.ip}:{self.port}: {e}")
             return False
 
     async def perform_handshake(self):
@@ -58,7 +58,7 @@ class PeerConnection:
             self.remote_peer_id = peer_id
             return True
         except (asyncio.TimeoutError, ConnectionResetError, ValueError) as e:
-            # print(f"Ошибка рукопожатия с {self.ip}:{self.port}: {e}")
+            print(f"Ошибка рукопожатия с {self.ip}:{self.port}: {e}")
             await self.close()
             return False
 
