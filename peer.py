@@ -1,8 +1,11 @@
 import asyncio
 import struct
+import math
 from piece_manager import PieceManager
 from torrent import Torrent
-import random
+
+
+MAX_PENDING_REQUESTS = 20
 
 
 class PeerConnection:
@@ -26,7 +29,8 @@ class PeerConnection:
         self.remote_peer_id = None
         self.is_choking = True  # Пир "душит" нас (не дает качать)
         self.is_interested = False  # Мы заинтересованы в пире
-        self.random_id = "".join(random.choice("0123456789") for _ in range(12))
+
+        self.pending_requests = 0
 
     async def connect(self):
         try:
@@ -56,11 +60,31 @@ class PeerConnection:
             if info_hash != self.info_hash:
                 raise ValueError("Info hash не совпадает")
             self.remote_peer_id = peer_id
+            await self.send_bitfield()
             return True
         except (asyncio.TimeoutError, ConnectionResetError, ValueError) as e:
             print(f"Ошибка рукопожатия с {self.ip}:{self.port}: {e}")
             await self.close()
             return False
+
+    async def send_bitfield(self):
+        # bitfield - это последовательность байт, где каждый бит представляет кусок
+        # Сначала создаем байтовый массив, заполненный нулями
+        bitfield_len = math.ceil(self.torrent.num_pieces / 8)
+        bitfield = bytearray(bitfield_len)
+
+        # Устанавливаем биты для тех кусков, которые у нас есть
+        for i, have in enumerate(self.piece_manager.have_pieces):
+            if have:
+                byte_index = i // 8
+                bit_index = i % 8
+                bitfield[byte_index] |= 1 << (7 - bit_index)
+
+        # Формируем и отправляем сообщение (длина, ID=5, payload)
+        msg = struct.pack(f">Ib{bitfield_len}s", 1 + bitfield_len, 5, bytes(bitfield))
+        self.writer.write(msg)
+        await self.writer.drain()
+        print(f"Отправлен bitfield пиру {self}")
 
     async def send_interested(self):
         msg = struct.pack(">Ib", 1, 2)  # length=1, id=2 (interested)
@@ -74,10 +98,25 @@ class PeerConnection:
         self.writer.write(msg)
         await self.writer.drain()
 
+    async def _send_requests(self):
+        """Пытается заполнить конвейер запросов до MAX_PENDING_REQUESTS."""
+        while not self.is_choking and self.pending_requests < MAX_PENDING_REQUESTS:
+            request = self.piece_manager.get_next_request(self)
+            if not request:
+                # Больше нет доступных блоков для запроса
+                break
+
+            piece_index, offset, length = request
+            # print(f"{self} запрашивает {piece_index}[{offset}:{offset+length}]")
+            await self.request_piece(piece_index, offset, length)
+            self.pending_requests += 1
+
     async def message_loop(self):
+        # Сразу после unchoke'а пытаемся отправить пачку запросов
+        await self._send_requests()
+
         while True:
             try:
-                # Читаем длину сообщения (4 байта)
                 msg_len_data = await asyncio.wait_for(
                     self.reader.readexactly(4), timeout=120
                 )
@@ -86,39 +125,43 @@ class PeerConnection:
                 if msg_len == 0:  # keep-alive
                     continue
 
-                # Читаем само сообщение
                 msg_data = await self.reader.readexactly(msg_len)
                 msg_id = msg_data[0]
-                # print(msg_id)
 
                 if msg_id == 0:  # Choke
                     self.is_choking = True
+                    # Когда нас "душат", все наши запросы отменяются пиром.
+                    # Сбросим счетчик, хотя PieceManager обработает таймауты.
+                    self.pending_requests = 0
                 elif msg_id == 1:  # Unchoke
                     self.is_choking = False
+                    # Пир нас "раздушил", немедленно отправляем новые запросы
+                    await self._send_requests()
+                elif msg_id == 5:  # Bitfield (добавим обработку на будущее)
+                    # Пока просто логируем, но в будущем здесь нужно будет парсить
+                    # и сохранять, какие куски есть у пира
+                    print(f"Получен bitfield от {self}")
                 elif msg_id == 7:  # Piece
+                    self.pending_requests -= 1
                     index, begin = struct.unpack(">II", msg_data[1:9])
                     block_data = msg_data[9:]
                     self.piece_manager.block_received(index, begin, block_data)
-                    # print(f"Пир {self.random_id} получил кусок от части {index}")
-                # print(msg_id, self.piece_manager.total_downloaded)
+                    # print(f"{self} получил блок от части {index}")
 
-                # После unchoke, если мы заинтересованы, запрашиваем следующую часть
-                if not self.is_choking and self.is_interested:
-                    request = self.piece_manager.get_next_request(self)
-                    # print("->", request)
-                    if request:
-                        await self.request_piece(*request)
+                    # Как только получили блок, конвейер освободился.
+                    # Пытаемся отправить еще запросы.
+                    await self._send_requests()
 
             except (
                 asyncio.IncompleteReadError,
                 ConnectionResetError,
                 asyncio.TimeoutError,
             ) as e:
-                print(f"Соединение с {self.ip}:{self.port} потеряно: {e}")
+                print(f"Соединение с {self} потеряно: {e}")
                 await self.close()
                 break
             except Exception as e:
-                print(f"Неожиданная ошибка с пиром {self.ip}:{self.port}: {e}")
+                print(f"Неожиданная ошибка с пиром {self}: {e}")
                 await self.close()
                 break
 

@@ -7,7 +7,8 @@ import asyncio
 
 class DownloadStatus(enum.Enum):
     STARTING = 0
-    SEEDING = 1
+    DOWNLOADING = 1
+    SEEDING = 2
 
 
 class Download:
@@ -18,6 +19,9 @@ class Download:
         self.piece_manager: PieceManager = PieceManager(self.torrent, self.destination)
         self.tracker: Tracker = Tracker(self.torrent)
         self.peers: list = []
+
+        self.start_time: float | None = None
+        self.end_time: float | None = None
 
     def create_task(self, task: asyncio.Task) -> None:
         self.task: asyncio.Task = task

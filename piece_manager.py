@@ -2,6 +2,7 @@ import os
 import math
 import hashlib
 import time
+import random
 from torrent import Torrent
 
 BLOCK_SIZE = 2**14  # 16 KB - стандартный размер блока для запроса
@@ -102,24 +103,28 @@ class PieceManager:
             ]
 
     def get_next_request(self, peer):
+        # Создаем временный список недостающих частей и перемешиваем его.
+        # Это обеспечит случайный выбор части, что гораздо эффективнее
+        # последовательного выбора.
+        shuffled_missing_pieces = self.missing_pieces[:]
+        random.shuffle(shuffled_missing_pieces)
+
+        # Сначала проверяем части, которые уже начали качать (вдруг там таймаут)
         for piece_index in list(self.pending_pieces.keys()):
             piece = self.pending_pieces[piece_index]
             timed_out_blocks = piece.get_timed_out_blocks()
 
             if timed_out_blocks:
-                print("BLOCK TIMED OUT")
-                # Берем первый блок с истекшим таймаутом
+                # print(f"BLOCK TIMED OUT for piece {piece_index}")
                 block_index = timed_out_blocks[0]
                 piece_length = self._get_piece_length(piece_index)
                 offset = block_index * BLOCK_SIZE
                 length = min(BLOCK_SIZE, piece_length - offset)
-
-                # Помечаем блок как запрошенный заново
                 piece.mark_block_requested(block_index)
                 return (piece_index, offset, length)
 
-        # Простая стратегия: запрашиваем первую доступную часть
-        for piece_index in self.missing_pieces:
+        # Теперь ищем новые части для загрузки в случайном порядке
+        for piece_index in shuffled_missing_pieces:
             piece_length = self._get_piece_length(piece_index)
             if piece_index not in self.pending_pieces:
                 self.pending_pieces[piece_index] = Piece(
@@ -128,13 +133,10 @@ class PieceManager:
 
             piece = self.pending_pieces[piece_index]
 
-            # Запрашиваем первый блок этой части
             for block_index in range(len(piece.blocks)):
                 if piece.is_block_available(block_index):
                     offset = block_index * BLOCK_SIZE
                     length = min(BLOCK_SIZE, piece_length - offset)
-
-                    # Помечаем блок как запрошенный
                     piece.mark_block_requested(block_index)
                     return (piece_index, offset, length)
         return None
