@@ -10,14 +10,25 @@ class Torrent:
         self.info = meta_info[b"info"]
         self.announce = meta_info[b"announce"].decode("utf-8")
 
-        self.meta = meta_info
-
         # Инфо-хэш - это SHA1 хэш bencoded-словаря 'info'
         self.info_hash = hashlib.sha1(encode(self.info)).digest()
 
         self.piece_length = self.info[b"piece length"]
         self.pieces_hashes = self._split_pieces_hashes(self.info[b"pieces"])
         self.name = self.info[b"name"].decode("utf-8")
+
+        self.trackers = []
+        if b"announce-list" in meta_info:
+            for tracker_group in meta_info[b"announce-list"]:
+                for tracker_url in tracker_group:
+                    self.trackers.append(tracker_url.decode("utf-8"))
+        elif b"announce" in meta_info:
+            self.trackers.append(meta_info[b"announce"].decode("utf-8"))
+
+        # Убираем дубликаты и оставляем только HTTP/HTTPS для текущей реализации
+        self.trackers = sorted(
+            list(set(t for t in self.trackers if t.startswith("http")))
+        )
 
         if b"files" in self.info:
             # Торрент с несколькими файлами

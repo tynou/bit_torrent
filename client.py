@@ -94,44 +94,44 @@ class TorrentClient:
     async def run(self):
         """Основной цикл для отображения статуса."""
         while True:
-            os.system("cls" if os.name == "nt" else "clear")
-            print("--- Python BitTorrent Client ---")
-            if not self.downloads:
-                print("Нет активных загрузок. Добавьте .torrent файл.")
+            # os.system("cls" if os.name == "nt" else "clear")
+            # print("--- Python BitTorrent Client ---")
+            # if not self.downloads:
+            #     print("Нет активных загрузок. Добавьте .torrent файл.")
 
-            for i, download in enumerate(self.downloads):
-                pm = download.piece_manager
-                bar_length = 20
+            # for i, download in enumerate(self.downloads):
+            #     pm = download.piece_manager
+            #     bar_length = 20
 
-                downloaded_mb = pm.total_downloaded / (1024 * 1024)
-                total_mb = download.torrent.total_size / (1024 * 1024)
+            #     downloaded_mb = pm.total_downloaded / (1024 * 1024)
+            #     total_mb = download.torrent.total_size / (1024 * 1024)
 
-                progress = pm.total_downloaded / download.torrent.total_size
-                filled_len = int(round(bar_length * progress))
-                bar = "█" * filled_len + "-" * (bar_length - filled_len)
+            #     progress = pm.total_downloaded / download.torrent.total_size
+            #     filled_len = int(round(bar_length * progress))
+            #     bar = "█" * filled_len + "-" * (bar_length - filled_len)
 
-                elapsed_time_str = "00:00:00"
-                if download.start_time:
-                    if download.end_time:
-                        # Загрузка завершена, показываем общее время
-                        elapsed_seconds = download.end_time - download.start_time
-                    else:
-                        # Загрузка в процессе, показываем текущее время
-                        elapsed_seconds = time.time() - download.start_time
-                    elapsed_time_str = format_time(elapsed_seconds)
+            #     elapsed_time_str = "00:00:00"
+            #     if download.start_time:
+            #         if download.end_time:
+            #             # Загрузка завершена, показываем общее время
+            #             elapsed_seconds = download.end_time - download.start_time
+            #         else:
+            #             # Загрузка в процессе, показываем текущее время
+            #             elapsed_seconds = time.time() - download.start_time
+            #         elapsed_time_str = format_time(elapsed_seconds)
 
-                print(f"{i + 1}. {download.torrent.name[:40]:<40}")
-                print(f"   [{bar}] {progress * 100:.2f}%")
-                print(f"   Скачано: {downloaded_mb:.2f} / {total_mb:.2f} MB")
-                print(f"   Статус: {download.status}")
-                print(f"   Пиры: {len(download.peers)}")
-                print(f"   Прошло: {elapsed_time_str}")
-                print("-" * 50)
+            #     print(f"{i + 1}. {download.torrent.name}")
+            #     print(f"   [{bar}] {progress * 100:.2f}%")
+            #     print(f"   Скачано: {downloaded_mb:.2f} / {total_mb:.2f} MB")
+            #     print(f"   Статус: {download.status}")
+            #     print(f"   Пиры: {len(download.peers)}")
+            #     print(f"   Прошло: {elapsed_time_str}")
+            #     print("-" * 50)
 
-            all_complete = all(d.piece_manager.is_complete() for d in self.downloads)
-            if self.downloads and all_complete:
-                print("Все загрузки завершены!")
-                break
+            # all_complete = all(d.piece_manager.is_complete() for d in self.downloads)
+            # if self.downloads and all_complete:
+            #     print("Все загрузки завершены!")
+            #     break
 
             await asyncio.sleep(1)
 

@@ -5,7 +5,7 @@ from piece_manager import PieceManager
 from torrent import Torrent
 
 
-MAX_PENDING_REQUESTS = 20
+MAX_PENDING_REQUESTS = 10
 
 
 class PeerConnection:
@@ -44,9 +44,10 @@ class PeerConnection:
 
     async def perform_handshake(self):
         handshake_msg = struct.pack(
-            ">B19s8x20s20s",
+            ">B19s8s20s20s",
             19,
             b"BitTorrent protocol",
+            b"\x00" * 8,
             self.info_hash,
             self.my_peer_id.encode(),
         )
@@ -55,8 +56,8 @@ class PeerConnection:
 
         try:
             response = await asyncio.wait_for(self.reader.readexactly(68), timeout=10)
-            print(struct.unpack(">B19s8x20s20s", response), self.info_hash)
-            pstrlen, pstr, info_hash, peer_id = struct.unpack(">B19s8x20s20s", response)
+            print(struct.unpack(">B19s8s20s20s", response), self.info_hash)
+            _, _, _, info_hash, peer_id = struct.unpack(">B19s8s20s20s", response)
             if info_hash != self.info_hash:
                 raise ValueError("Info hash не совпадает")
             self.remote_peer_id = peer_id
