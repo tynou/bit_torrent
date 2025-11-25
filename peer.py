@@ -5,7 +5,7 @@ from piece_manager import PieceManager
 from torrent import Torrent
 
 
-MAX_PENDING_REQUESTS = 10
+MAX_PENDING_REQUESTS = 100
 
 
 class PeerConnection:

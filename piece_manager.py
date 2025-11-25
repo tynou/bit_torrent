@@ -6,7 +6,7 @@ import random
 from torrent import Torrent
 
 BLOCK_SIZE = 2**14  # 16 KB - стандартный размер блока для запроса
-REQUEST_TIMEOUT = 5
+REQUEST_TIMEOUT = 3
 
 
 class Piece:
