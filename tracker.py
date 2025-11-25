@@ -12,11 +12,10 @@ class Tracker:
     def __init__(self, torrent: Torrent):
         self.torrent: Torrent = torrent
         self.peer_id: str = self._generate_peer_id()
-        self.port: int = 6881  # Порт, который мы будем "слушать"
+        self.port: int = 6881
         self.session: aiohttp.ClientSession = aiohttp.ClientSession()
 
     def _generate_peer_id(self) -> str:
-        # Генерируем уникальный ID для нашего клиента
         return "-PY0001-" + "".join(random.choice("0123456789") for _ in range(12))
 
     async def _get_peers_from_tracker(self, tracker_url, downloaded, uploaded, left):
@@ -55,9 +54,8 @@ class Tracker:
             return None, None
 
     async def get_peers(self, downloaded, uploaded, left):
-        """Опрашивает все трекеры из torrent-файла и возвращает объединенный список пиров."""
         all_peers = set()
-        min_interval = 120  # Интервал по умолчанию
+        min_interval = 60
 
         tasks = [
             self._get_peers_from_tracker(url, downloaded, uploaded, left)

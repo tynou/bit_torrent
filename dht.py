@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import asyncio
 import socket
 import os
@@ -14,10 +13,6 @@ BOOTSTRAP_NODES = [
 
 
 class DHTClient:
-    """
-    A simplified BitTorrent DHT client that runs in the background.
-    """
-
     def __init__(self, port=6881):
         self.port = port
         self.node_id = os.urandom(20)
@@ -29,7 +24,6 @@ class DHTClient:
         self.running = False
 
     async def start(self):
-        """Binds the socket and starts the listening loop."""
         if self.running:
             return
         try:
@@ -47,7 +41,6 @@ class DHTClient:
         print("DHT client started.")
 
     def stop(self):
-        """Stops the client and cleans up."""
         if self.listener_task:
             self.listener_task.cancel()
         self.socket.close()
@@ -78,7 +71,7 @@ class DHTClient:
                 try:
                     ip = socket.inet_ntoa(peer_bytes[:4])
                     port = struct.unpack("!H", peer_bytes[4:])[0]
-                    # Простая проверка на валидность порта
+
                     if port > 0 and port < 65536:
                         peers.add((ip, port))
                 except struct.error:
@@ -123,7 +116,6 @@ class DHTClient:
                 continue
 
     async def bootstrap(self):
-        """Populates the routing table by contacting bootstrap nodes."""
         print("Bootstrapping into the DHT network...")
         tasks = [
             self.find_node((host, port), self.node_id) for host, port in BOOTSTRAP_NODES
@@ -163,9 +155,6 @@ class DHTClient:
     async def find_peers_for_infohash(
         self, info_hash: bytes, peers_queue: asyncio.Queue
     ):
-        """
-        Continuously searches for peers for a given infohash and puts them in a queue.
-        """
         if not self.running:
             print("Error: DHT client is not running. Call start() first.")
             return
@@ -179,13 +168,10 @@ class DHTClient:
 
         print(f"Starting continuous DHT peer search for infohash: {info_hash.hex()}")
 
-        while True:  # Бесконечный цикл поиска
+        while True:
             if not nodes_to_query:
-                # Если список для опроса пуст, пополняем его из таблицы маршрутизации
                 nodes_to_query.extend(self.routing_table)
-                # Очищаем множество уже опрошенных, чтобы периодически переспрашивать
                 queried_nodes.clear()
-                # Небольшая пауза перед новым кругом
                 await asyncio.sleep(5)
 
             max_requests = 100
@@ -207,13 +193,12 @@ class DHTClient:
                 if isinstance(result, Exception) or result is None:
                     continue
 
-                if isinstance(result, set):  # Нашли пиров
+                if isinstance(result, set):
                     for peer in result:
                         await peers_queue.put(peer)
-                elif isinstance(result, list):  # Нашли новые узлы
+                elif isinstance(result, list):
                     for node in result:
                         if (node["ip"], node["port"]) not in queried_nodes:
                             nodes_to_query.append(node)
 
-            # Небольшая задержка, чтобы не перегружать сеть
             await asyncio.sleep(1)

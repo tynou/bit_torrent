@@ -10,7 +10,6 @@ class Torrent:
         self.info = meta_info[b"info"]
         self.announce = meta_info[b"announce"].decode("utf-8")
 
-        # Инфо-хэш - это SHA1 хэш bencoded-словаря 'info'
         self.info_hash = hashlib.sha1(encode(self.info)).digest()
 
         self.piece_length = self.info[b"piece length"]
@@ -25,13 +24,11 @@ class Torrent:
         elif b"announce" in meta_info:
             self.trackers.append(meta_info[b"announce"].decode("utf-8"))
 
-        # Убираем дубликаты и оставляем только HTTP/HTTPS для текущей реализации
         self.trackers = sorted(
             list(set(t for t in self.trackers if t.startswith("http")))
         )
 
         if b"files" in self.info:
-            # Торрент с несколькими файлами
             self.files = [
                 {
                     "path": [p.decode("utf-8") for p in f[b"path"]],
@@ -41,14 +38,12 @@ class Torrent:
             ]
             self.total_size = sum(f["length"] for f in self.files)
         else:
-            # Торрент с одним файлом
             self.files = []
             self.total_size = self.info[b"length"]
 
         self.num_pieces = len(self.pieces_hashes)
 
     def _split_pieces_hashes(self, pieces_blob: bytes):
-        # Хэши кусков хранятся как конкатенация 20-байтных SHA1 хэшей
         return [pieces_blob[i : i + 20] for i in range(0, len(pieces_blob), 20)]
 
     def __str__(self):
