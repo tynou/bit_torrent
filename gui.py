@@ -271,7 +271,7 @@ def main():
     client = TorrentClient()
 
     # 2. Запускаем фоновые задачи через create_task, а не await (так как main синхронный)
-    loop.create_task(client.start())
+    # loop.create_task(client.start())
 
     window = MainWindow(client)
     window.show()

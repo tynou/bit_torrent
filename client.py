@@ -3,7 +3,6 @@ import time
 from torrent import Torrent
 from peer import PeerConnection
 from download import Download, DownloadStatus
-from dht import DHTClient
 
 MAX_PEERS = 50
 
@@ -11,15 +10,10 @@ MAX_PEERS = 50
 class TorrentClient:
     def __init__(self) -> None:
         self.downloads: list[Download] = []
-        self.dht = DHTClient()
         self.running = True
-
-    async def start(self):
-        await self.dht.start()
 
     def stop(self):
         self.running = False
-        self.dht.stop()
         for download in self.downloads:
             self.stop_download(download)
 
@@ -64,25 +58,18 @@ class TorrentClient:
         download.status = DownloadStatus.PAUSED
         download.speed = 0
         self.stop_download(download)
-        # Сохраняем файлы (flush buffers)
-        # download.piece_manager.close_files() # Можно закрыть хендлы, если нужно
 
     async def resume_torrent(self, download: Download):
         if download.status == DownloadStatus.DOWNLOADING:
             return
 
         print(f"Resuming {download.torrent.name}...")
-        download.status = DownloadStatus.STARTING  # Временно, пока ищет пиров
+        download.status = DownloadStatus.STARTING
 
         # Пересоздаем задачу скачивания
         download.create_task(asyncio.create_task(self._download_loop(download)))
 
-        # Запускаем поиск пиров
-        asyncio.create_task(
-            self.dht.find_peers_for_infohash(
-                download.torrent.info_hash, download.peers_queue
-            )
-        )
+        # Блок запуска DHT удален. Теперь пиры будут поступать только из _download_loop (Tracker)
 
     async def _download_loop(self, download: Download):
         """Основной цикл скачивания одной раздачи."""
@@ -91,7 +78,8 @@ class TorrentClient:
         tracker = download.tracker
 
         last_tracker_announce = 0.0
-        tracker_interval = 60
+        # Ставим 0, чтобы запросить трекер сразу при старте цикла
+        tracker_interval = 0
 
         try:
             while (
@@ -100,8 +88,10 @@ class TorrentClient:
             ):
                 current_time = time.time()
 
-                # 1. Трекер
+                # 1. Трекер (основной и единственный источник пиров теперь)
                 if current_time - last_tracker_announce > tracker_interval:
+                    print(f"[{download.torrent.name}] Requesting peers from tracker...")
+
                     # Для расчета left берем только нужные куски
                     needed_bytes = (
                         piece_manager.total_pieces_to_download
@@ -109,14 +99,28 @@ class TorrentClient:
                     )
                     left = max(0, needed_bytes - piece_manager.total_downloaded)
 
-                    tracker_peers, new_interval = await tracker.get_peers(
-                        piece_manager.total_downloaded, 0, left
-                    )
-                    tracker_interval = new_interval or 60
-                    last_tracker_announce = current_time
-                    if tracker_peers:
-                        for peer in tracker_peers:
-                            await download.peers_queue.put(peer)
+                    try:
+                        tracker_peers, new_interval = await tracker.get_peers(
+                            piece_manager.total_downloaded, 0, left
+                        )
+
+                        tracker_interval = new_interval if new_interval else 60
+                        last_tracker_announce = current_time
+
+                        if tracker_peers:
+                            print(
+                                f"[{download.torrent.name}] Tracker returned {len(tracker_peers)} peers."
+                            )
+                            for peer in tracker_peers:
+                                await download.peers_queue.put(peer)
+                        else:
+                            print(
+                                f"[{download.torrent.name}] Tracker returned no peers."
+                            )
+
+                    except Exception as e:
+                        print(f"Tracker error: {e}")
+                        tracker_interval = 60  # Повтор через минуту при ошибке
 
                 # 2. Обработка очереди пиров
                 while not download.peers_queue.empty():
@@ -178,6 +182,7 @@ class TorrentClient:
             await peer.message_loop()
         except Exception as e:
             print(f"Client error: {e}")
+            pass
         finally:
             if peer in download.peers:
                 download.peers.remove(peer)
