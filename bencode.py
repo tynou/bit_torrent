@@ -1,5 +1,4 @@
 def decode(bencoded_data: bytes):
-    """Декодирует bencoded данные."""
     try:
         data, length = decode_recursive(bencoded_data)
         if length != len(bencoded_data):
