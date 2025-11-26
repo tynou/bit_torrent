@@ -199,6 +199,40 @@ class PieceManager:
                 return (piece_index, offset, length)
         return None
 
+    def read_block(self, piece_index: int, offset: int, length: int) -> bytes:
+        if not self.have_pieces[piece_index]:
+            return b""
+
+        global_offset = piece_index * self.torrent.piece_length + offset
+        result_data = bytearray()
+        bytes_to_read = length
+        current_pos = global_offset
+
+        while bytes_to_read > 0:
+            file_info = self._get_file_for_offset(current_pos)
+            if not file_info:
+                break
+
+            file_start = file_info["start"]
+            file_end = file_info["end"]
+            file_path = file_info["path"]
+
+            pos_in_file = current_pos - file_start
+            chunk_size = min(bytes_to_read, file_end - current_pos)
+
+            try:
+                with open(file_path, "rb") as f:
+                    f.seek(pos_in_file)
+                    chunk = f.read(chunk_size)
+                    result_data.extend(chunk)
+            except IOError:
+                return b""
+
+            current_pos += len(chunk)
+            bytes_to_read -= len(chunk)
+
+        return bytes(result_data)
+
     async def block_received_async(self, piece_index: int, offset: int, data: bytes):
         if piece_index not in self.pending_pieces:
             return False

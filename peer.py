@@ -30,6 +30,9 @@ class PeerConnection:
         self.is_choking = True
         self.is_interested = False
 
+        self.peer_interested = False
+        self.am_choking = True
+
         self.pending_requests = 0
 
     async def connect(self):
@@ -84,6 +87,21 @@ class PeerConnection:
         await self.writer.drain()
         self.is_interested = True
 
+    async def send_unchoke(self):
+        if self.am_choking:
+            msg = struct.pack(">Ib", 1, 1)
+            self.writer.write(msg)
+            await self.writer.drain()
+            self.am_choking = False
+
+    async def send_piece(self, index, begin, block_data):
+        msg_len = 9 + len(block_data)
+        msg = struct.pack(
+            f">IbII{len(block_data)}s", msg_len, 7, index, begin, block_data
+        )
+        self.writer.write(msg)
+        await self.writer.drain()
+
     async def request_piece(self, piece_index, offset, length):
         msg = struct.pack(">IbIII", 13, 6, piece_index, offset, length)
         self.writer.write(msg)
@@ -122,6 +140,33 @@ class PeerConnection:
                 elif msg_id == 1:  # Unchoke
                     self.is_choking = False
                     await self._send_requests()
+                elif msg_id == 2:  # Interested
+                    self.peer_interested = True
+                    await self.send_unchoke()
+                elif msg_id == 3:  # Not Interested
+                    self.peer_interested = False
+                elif msg_id == 6:  # Request
+                    if len(msg_data) >= 13:
+                        index, begin, length = struct.unpack(">III", msg_data[1:13])
+                        if (
+                            self.piece_manager.have_pieces[index]
+                            and not self.am_choking
+                        ):
+                            if length > 2**17:
+                                await self.close()
+                                break
+
+                            loop = asyncio.get_running_loop()
+                            block_data = await loop.run_in_executor(
+                                None,
+                                self.piece_manager.read_block,
+                                index,
+                                begin,
+                                length,
+                            )
+                            if block_data:
+                                await self.send_piece(index, begin, block_data)
+
                 elif msg_id == 7:  # Piece
                     self.pending_requests -= 1
                     index, begin = struct.unpack(">II", msg_data[1:9])

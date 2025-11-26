@@ -18,7 +18,9 @@ class Tracker:
     def _generate_peer_id(self) -> str:
         return "-PY0001-" + "".join(random.choice("0123456789") for _ in range(12))
 
-    async def _get_peers_from_tracker(self, tracker_url, downloaded, uploaded, left):
+    async def _get_peers_from_tracker(
+        self, tracker_url, downloaded, uploaded, left, event=""
+    ):
         params = {
             "info_hash": self.torrent.info_hash,
             "peer_id": self.peer_id,
@@ -27,15 +29,16 @@ class Tracker:
             "downloaded": downloaded,
             "left": left,
             "compact": 1,
-            "event": "started",
         }
+
+        if event:
+            params["event"] = event
 
         url = tracker_url + ("&" if "?" in tracker_url else "?") + urlencode(params)
 
         try:
             async with self.session.get(url, timeout=10) as response:
                 if response.status != 200:
-                    print(f"Ошибка трекера {tracker_url}: {response.status}")
                     return None, None
                 data = await response.read()
                 tracker_response = decode(data)
@@ -53,12 +56,12 @@ class Tracker:
             print(f"Не удалось подключиться к трекеру {tracker_url}: {e}")
             return None, None
 
-    async def get_peers(self, downloaded, uploaded, left):
+    async def get_peers(self, downloaded, uploaded, left, event=""):
         all_peers = set()
         min_interval = 60
 
         tasks = [
-            self._get_peers_from_tracker(url, downloaded, uploaded, left)
+            self._get_peers_from_tracker(url, downloaded, uploaded, left, event)
             for url in self.torrent.trackers
         ]
 
@@ -74,7 +77,7 @@ class Tracker:
             if interval is not None:
                 min_interval = min(min_interval, interval)
 
-        return list(all_peers), min_interval
+        return list(all_peers), max(60, min_interval)
 
     def _parse_peers(self, peers_blob: bytes):
         peers = []
