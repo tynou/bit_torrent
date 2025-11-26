@@ -82,7 +82,18 @@ class PieceManager:
 
         self.missing_pieces = self._calculate_needed_pieces()
         self.total_pieces_to_download = len(self.missing_pieces)
+        self.total_selected_size = self._calculate_total_selected_size()
         self.files_info = []
+
+    def _calculate_total_selected_size(self) -> int:
+        total_size = 0
+        if self.torrent.files:
+            for i, file_info in enumerate(self.torrent.files):
+                if self.file_selection[i]:
+                    total_size += file_info["length"]
+        elif self.file_selection and self.file_selection[0]:
+            total_size = self.torrent.total_size
+        return total_size
 
     def _calculate_needed_pieces(self):
         needed_pieces = set()
@@ -90,7 +101,10 @@ class PieceManager:
         current_offset = 0
 
         if not self.torrent.files:
-            return list(range(self.torrent.num_pieces))
+            if self.file_selection and self.file_selection[0]:
+                return list(range(self.torrent.num_pieces))
+            else:
+                return []
 
         for i, file_info in enumerate(self.torrent.files):
             length = file_info["length"]
@@ -132,13 +146,14 @@ class PieceManager:
                     )
                 current_offset += file_info["length"]
         else:
-            file_path = os.path.join(self.destination, self.torrent.name)
-            if not os.path.exists(file_path):
-                with open(file_path, "wb") as f:
-                    f.truncate(self.torrent.total_size)
-            self.files_info = [
-                {"path": file_path, "start": 0, "end": self.torrent.total_size}
-            ]
+            if self.file_selection and self.file_selection[0]:
+                file_path = os.path.join(self.destination, self.torrent.name)
+                if not os.path.exists(file_path):
+                    with open(file_path, "wb") as f:
+                        f.truncate(self.torrent.total_size)
+                self.files_info = [
+                    {"path": file_path, "start": 0, "end": self.torrent.total_size}
+                ]
 
     def get_next_request(self, peer, max_pending_global_pieces):
         for piece_index in list(self.pending_pieces.keys()):
@@ -191,7 +206,7 @@ class PieceManager:
         piece = self.pending_pieces[piece_index]
         block_index = offset // BLOCK_SIZE
 
-        if not piece.blocks[block_index]:
+        if block_index < len(piece.blocks) and not piece.blocks[block_index]:
             piece.add_block(offset, data)
             self.total_downloaded += len(data)
 
@@ -209,6 +224,7 @@ class PieceManager:
                         del self.pending_pieces[piece_index]
                 else:
                     print(f"Hash error piece {piece_index}, re-downloading")
+                    self.total_downloaded -= piece.length
                     if piece_index in self.pending_pieces:
                         del self.pending_pieces[piece_index]
         return True
@@ -219,26 +235,39 @@ class PieceManager:
 
         while data_ptr < piece.length:
             file_info = self._get_file_for_offset(piece_offset)
-            if not file_info:
-                break
 
-            file_path = file_info["path"]
-            file_start = file_info["start"]
-            file_end = file_info["end"]
+            if file_info:
+                file_path = file_info["path"]
+                file_start = file_info["start"]
+                file_end = file_info["end"]
 
-            write_pos = piece_offset - file_start
-            to_write = min(piece.length - data_ptr, file_end - piece_offset)
+                write_pos_in_file = piece_offset - file_start
 
-            try:
-                mode = "r+b" if os.path.exists(file_path) else "wb"
-                with open(file_path, mode) as f:
-                    f.seek(write_pos)
-                    f.write(piece.data[data_ptr : data_ptr + to_write])
-            except IOError as e:
-                print(f"Disk write error for {file_path}: {e}")
+                bytes_to_write = min(piece.length - data_ptr, file_end - piece_offset)
 
-            data_ptr += to_write
-            piece_offset += to_write
+                try:
+                    mode = "r+b" if os.path.exists(file_path) else "wb"
+                    with open(file_path, mode) as f:
+                        f.seek(write_pos_in_file)
+                        f.write(piece.data[data_ptr : data_ptr + bytes_to_write])
+                except IOError as e:
+                    print(f"Disk write error for {file_path}: {e}")
+
+                data_ptr += bytes_to_write
+                piece_offset += bytes_to_write
+            else:
+                next_file_start = float("inf")
+                for f in self.files_info:
+                    if f["start"] > piece_offset:
+                        next_file_start = f["start"]
+                        break
+
+                bytes_to_skip = min(
+                    piece.length - data_ptr, next_file_start - piece_offset
+                )
+
+                data_ptr += bytes_to_skip
+                piece_offset += bytes_to_skip
 
     def _get_file_for_offset(self, global_offset):
         for f in self.files_info:

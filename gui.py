@@ -28,7 +28,7 @@ def format_bytes(size):
     power = 2**10
     n = 0
     power_labels = {0: "", 1: "K", 2: "M", 3: "G", 4: "T"}
-    while size > power:
+    while size >= power and n < len(power_labels) - 1:
         size /= power
         n += 1
     return f"{size:.2f} {power_labels.get(n, '')}B"
@@ -225,13 +225,16 @@ class MainWindow(QMainWindow):
             # Name
             self._update_table_item(i, 0, d.torrent.name)
 
+            displayed_downloaded = min(pm.total_downloaded, pm.total_selected_size)
+
             # Progress
             progress = 0
-            if pm.total_pieces_to_download > 0:
-                needed = pm.total_pieces_to_download
-                missing = len(pm.missing_pieces)
-                done = needed - missing
-                progress = (done / needed) * 100
+            if pm.total_selected_size > 0:
+                progress = min(
+                    100, (displayed_downloaded / pm.total_selected_size) * 100
+                )
+            elif pm.is_complete():
+                progress = 100
 
             prog_widget = self.table.cellWidget(i, 1)
             if not prog_widget:
@@ -240,7 +243,7 @@ class MainWindow(QMainWindow):
             prog_widget.setValue(int(progress))
 
             # Size
-            size_str = f"{format_bytes(pm.total_downloaded)} / {format_bytes(d.torrent.total_size)}"
+            size_str = f"{format_bytes(displayed_downloaded)} / {format_bytes(pm.total_selected_size)}"
             self._update_table_item(i, 2, size_str)
 
             # Speed
@@ -274,9 +277,6 @@ def main():
     asyncio.set_event_loop(loop)
 
     client = TorrentClient()
-
-    # 2. Запускаем фоновые задачи через create_task, а не await (так как main синхронный)
-    # loop.create_task(client.start())
 
     window = MainWindow(client)
     window.show()
