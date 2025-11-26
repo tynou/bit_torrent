@@ -4,8 +4,8 @@ import math
 from piece_manager import PieceManager
 from torrent import Torrent
 
-
 MAX_PENDING_REQUESTS = 100
+MAX_PENDING_PIECES = 50
 
 
 class PeerConnection:
@@ -35,11 +35,11 @@ class PeerConnection:
     async def connect(self):
         try:
             self.reader, self.writer = await asyncio.wait_for(
-                asyncio.open_connection(self.ip, self.port), timeout=10
+                asyncio.open_connection(self.ip, self.port),
+                timeout=5,
             )
             return True
-        except (asyncio.TimeoutError, ConnectionRefusedError, OSError) as e:
-            print(f"Не удалось подключиться к {self.ip}:{self.port}: {e}")
+        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
             return False
 
     async def perform_handshake(self):
@@ -55,35 +55,31 @@ class PeerConnection:
         await self.writer.drain()
 
         try:
-            response = await asyncio.wait_for(self.reader.readexactly(68), timeout=10)
+            response = await asyncio.wait_for(self.reader.readexactly(68), timeout=5)
             _, _, _, info_hash, peer_id = struct.unpack(">B19s8s20s20s", response)
             if info_hash != self.info_hash:
                 raise ValueError("Info hash не совпадает")
             self.remote_peer_id = peer_id
             await self.send_bitfield()
             return True
-        except (asyncio.TimeoutError, ConnectionResetError, ValueError) as e:
-            print(f"Ошибка рукопожатия с {self.ip}:{self.port}: {e}")
+        except (asyncio.TimeoutError, ConnectionResetError, ValueError):
             await self.close()
             return False
 
     async def send_bitfield(self):
         bitfield_len = math.ceil(self.torrent.num_pieces / 8)
         bitfield = bytearray(bitfield_len)
-
         for i, have in enumerate(self.piece_manager.have_pieces):
             if have:
                 byte_index = i // 8
                 bit_index = i % 8
                 bitfield[byte_index] |= 1 << (7 - bit_index)
-
         msg = struct.pack(f">Ib{bitfield_len}s", 1 + bitfield_len, 5, bytes(bitfield))
         self.writer.write(msg)
         await self.writer.drain()
-        print(f"Отправлен bitfield пиру {self}")
 
     async def send_interested(self):
-        msg = struct.pack(">Ib", 1, 2)  # length=1, id=2 (interested)
+        msg = struct.pack(">Ib", 1, 2)
         self.writer.write(msg)
         await self.writer.drain()
         self.is_interested = True
@@ -94,8 +90,11 @@ class PeerConnection:
         await self.writer.drain()
 
     async def _send_requests(self):
+        if len(self.piece_manager.pending_pieces) >= MAX_PENDING_PIECES:
+            pass
+
         while not self.is_choking and self.pending_requests < MAX_PENDING_REQUESTS:
-            request = self.piece_manager.get_next_request(self)
+            request = self.piece_manager.get_next_request(self, MAX_PENDING_PIECES)
             if not request:
                 break
 
@@ -108,12 +107,10 @@ class PeerConnection:
 
         while True:
             try:
-                msg_len_data = await asyncio.wait_for(
-                    self.reader.readexactly(4), timeout=120
-                )
+                msg_len_data = await self.reader.readexactly(4)
                 msg_len = struct.unpack(">I", msg_len_data)[0]
 
-                if msg_len == 0:
+                if msg_len == 0:  # Keep-alive
                     continue
 
                 msg_data = await self.reader.readexactly(msg_len)
@@ -125,13 +122,14 @@ class PeerConnection:
                 elif msg_id == 1:  # Unchoke
                     self.is_choking = False
                     await self._send_requests()
-                elif msg_id == 5:  # Bitfield
-                    print(f"Получен bitfield от {self}")
                 elif msg_id == 7:  # Piece
                     self.pending_requests -= 1
                     index, begin = struct.unpack(">II", msg_data[1:9])
                     block_data = msg_data[9:]
-                    self.piece_manager.block_received(index, begin, block_data)
+
+                    await self.piece_manager.block_received_async(
+                        index, begin, block_data
+                    )
 
                     await self._send_requests()
 
@@ -139,16 +137,19 @@ class PeerConnection:
                 asyncio.IncompleteReadError,
                 ConnectionResetError,
                 asyncio.TimeoutError,
-            ) as e:
-                print(f"Соединение с {self} потеряно: {e}")
+                OSError,
+            ):
                 await self.close()
                 break
             except Exception as e:
-                print(f"Неожиданная ошибка с пиром {self}: {e}")
+                print(f"Peer error: {e}")
                 await self.close()
                 break
 
     async def close(self):
         if self.writer:
-            self.writer.close()
-            await self.writer.wait_closed()
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass

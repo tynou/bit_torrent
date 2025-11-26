@@ -26,7 +26,8 @@ class Download:
             self.torrent, self.destination, self.file_selection
         )
 
-        self.tracker: Tracker = Tracker(self.torrent)
+        self.tracker: Tracker | None = None
+
         self.peers: list = []
         self.peers_queue: asyncio.Queue = asyncio.Queue()
         self.task: asyncio.Task | None = None

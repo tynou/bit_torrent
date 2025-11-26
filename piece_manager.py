@@ -3,10 +3,11 @@ import math
 import hashlib
 import time
 import random
+import asyncio
 from torrent import Torrent
 
 BLOCK_SIZE = 2**14
-REQUEST_TIMEOUT = 10
+REQUEST_TIMEOUT = 2
 
 
 class Piece:
@@ -25,10 +26,9 @@ class Piece:
             self.blocks[block_index] = True
             self.requested_blocks[block_index] = 0
             start = offset % self.length
-            # Защита от переполнения
             end = start + len(block_data)
             if end > self.length:
-                return  # Invalid block data
+                return
             self.data[start:end] = block_data
             self.num_blocks_received += 1
 
@@ -56,7 +56,7 @@ class Piece:
         return timed_out_blocks
 
     def is_complete(self):
-        return all(self.blocks)
+        return self.num_blocks_received == len(self.blocks)
 
     def is_hash_valid(self):
         return hashlib.sha1(self.data).digest() == self.hash_value
@@ -69,7 +69,6 @@ class PieceManager:
         self.torrent: Torrent = torrent
         self.destination: str = destination
 
-        # Если выбор не передан, выбираем все
         if file_selection is None:
             self.file_selection = (
                 [True] * len(torrent.files) if torrent.files else [True]
@@ -81,19 +80,15 @@ class PieceManager:
         self.pending_pieces: dict[int, Piece] = {}
         self.total_downloaded: int = 0
 
-        # Определяем, какие куски нам нужны, исходя из выбранных файлов
         self.missing_pieces = self._calculate_needed_pieces()
         self.total_pieces_to_download = len(self.missing_pieces)
-
-        self._setup_files()
+        self.files_info = []
 
     def _calculate_needed_pieces(self):
-        """Определяет индексы кусков, которые затрагивают выбранные файлы."""
         needed_pieces = set()
         piece_length = self.torrent.piece_length
         current_offset = 0
 
-        # Если это single-file torrent
         if not self.torrent.files:
             return list(range(self.torrent.num_pieces))
 
@@ -102,7 +97,6 @@ class PieceManager:
             start_byte = current_offset
             end_byte = current_offset + length
 
-            # Если файл выбран
             if self.file_selection[i]:
                 start_piece = start_byte // piece_length
                 end_piece = (end_byte - 1) // piece_length
@@ -113,46 +107,43 @@ class PieceManager:
 
         return sorted(list(needed_pieces))
 
-    def _setup_files(self):
-        self.file_handles = []
+    def initialize(self):
         if self.torrent.files:
             base_dir = os.path.join(self.destination, self.torrent.name)
             os.makedirs(base_dir, exist_ok=True)
             current_offset = 0
 
             for i, file_info in enumerate(self.torrent.files):
-                f = None
-
                 if self.file_selection[i]:
                     path_parts = [base_dir] + file_info["path"]
                     file_path = os.path.join(*path_parts)
                     os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                    f = open(file_path, "rb+" if os.path.exists(file_path) else "wb+")
-                    f.truncate(file_info["length"])
 
-                self.file_handles.append(
-                    {
-                        "handle": f,  # Может быть None
-                        "start": current_offset,
-                        "end": current_offset + file_info["length"],
-                    }
-                )
+                    if not os.path.exists(file_path):
+                        with open(file_path, "wb") as f:
+                            f.truncate(file_info["length"])
+
+                    self.files_info.append(
+                        {
+                            "path": file_path,
+                            "start": current_offset,
+                            "end": current_offset + file_info["length"],
+                        }
+                    )
                 current_offset += file_info["length"]
         else:
             file_path = os.path.join(self.destination, self.torrent.name)
-            f = open(file_path, "rb+" if os.path.exists(file_path) else "wb+")
-            f.truncate(self.torrent.total_size)
-            self.file_handles = [
-                {"handle": f, "start": 0, "end": self.torrent.total_size}
+            if not os.path.exists(file_path):
+                with open(file_path, "wb") as f:
+                    f.truncate(self.torrent.total_size)
+            self.files_info = [
+                {"path": file_path, "start": 0, "end": self.torrent.total_size}
             ]
 
-    def get_next_request(self, peer):
-        # Логика та же, но self.missing_pieces теперь содержит только нужные нам куски
-        shuffled_missing_pieces = self.missing_pieces[:]
-        random.shuffle(shuffled_missing_pieces)
-
+    def get_next_request(self, peer, max_pending_global_pieces):
         for piece_index in list(self.pending_pieces.keys()):
             piece = self.pending_pieces[piece_index]
+
             timed_out_blocks = piece.get_timed_out_blocks()
             if timed_out_blocks:
                 block_index = timed_out_blocks[0]
@@ -162,40 +153,65 @@ class PieceManager:
                 piece.mark_block_requested(block_index)
                 return (piece_index, offset, length)
 
-        for piece_index in shuffled_missing_pieces:
-            piece_length = self._get_piece_length(piece_index)
-            if piece_index not in self.pending_pieces:
-                self.pending_pieces[piece_index] = Piece(
-                    piece_index, piece_length, self.torrent.pieces_hashes[piece_index]
-                )
-            piece = self.pending_pieces[piece_index]
             for block_index in range(len(piece.blocks)):
                 if piece.is_block_available(block_index):
+                    piece_length = self._get_piece_length(piece_index)
                     offset = block_index * BLOCK_SIZE
                     length = min(BLOCK_SIZE, piece_length - offset)
                     piece.mark_block_requested(block_index)
                     return (piece_index, offset, length)
+
+        if len(self.pending_pieces) >= max_pending_global_pieces:
+            return None
+
+        if not self.missing_pieces:
+            return None
+
+        piece_index = random.choice(self.missing_pieces)
+
+        piece_length = self._get_piece_length(piece_index)
+        if piece_index not in self.pending_pieces:
+            self.pending_pieces[piece_index] = Piece(
+                piece_index, piece_length, self.torrent.pieces_hashes[piece_index]
+            )
+
+        piece = self.pending_pieces[piece_index]
+        for block_index in range(len(piece.blocks)):
+            if piece.is_block_available(block_index):
+                offset = block_index * BLOCK_SIZE
+                length = min(BLOCK_SIZE, piece_length - offset)
+                piece.mark_block_requested(block_index)
+                return (piece_index, offset, length)
         return None
 
-    def block_received(self, piece_index: int, offset: int, data: bytes):
-        if piece_index in self.pending_pieces:
-            piece = self.pending_pieces[piece_index]
-            block_index = offset // BLOCK_SIZE
-            if not piece.blocks[block_index]:
-                piece.add_block(offset, data)
-                self.total_downloaded += len(data)
-                if piece.is_complete():
-                    if piece.is_hash_valid():
-                        self._write_piece_to_disk(piece)
-                        self.have_pieces[piece_index] = True
-                        if piece_index in self.missing_pieces:
-                            self.missing_pieces.remove(piece_index)
+    async def block_received_async(self, piece_index: int, offset: int, data: bytes):
+        if piece_index not in self.pending_pieces:
+            return False
+
+        piece = self.pending_pieces[piece_index]
+        block_index = offset // BLOCK_SIZE
+
+        if not piece.blocks[block_index]:
+            piece.add_block(offset, data)
+            self.total_downloaded += len(data)
+
+            if piece.is_complete():
+                loop = asyncio.get_running_loop()
+
+                is_valid = await loop.run_in_executor(None, piece.is_hash_valid)
+
+                if is_valid:
+                    await loop.run_in_executor(None, self._write_piece_to_disk, piece)
+                    self.have_pieces[piece_index] = True
+                    if piece_index in self.missing_pieces:
+                        self.missing_pieces.remove(piece_index)
+                    if piece_index in self.pending_pieces:
                         del self.pending_pieces[piece_index]
-                    else:
-                        print(f"Hash error piece {piece_index}")
+                else:
+                    print(f"Hash error piece {piece_index}, re-downloading")
+                    if piece_index in self.pending_pieces:
                         del self.pending_pieces[piece_index]
-            return True
-        return False
+        return True
 
     def _write_piece_to_disk(self, piece: Piece):
         piece_offset = piece.index * self.torrent.piece_length
@@ -206,22 +222,26 @@ class PieceManager:
             if not file_info:
                 break
 
-            handle = file_info["handle"]
+            file_path = file_info["path"]
             file_start = file_info["start"]
             file_end = file_info["end"]
 
             write_pos = piece_offset - file_start
             to_write = min(piece.length - data_ptr, file_end - piece_offset)
 
-            if handle:
-                handle.seek(write_pos)
-                handle.write(piece.data[data_ptr : data_ptr + to_write])
+            try:
+                mode = "r+b" if os.path.exists(file_path) else "wb"
+                with open(file_path, mode) as f:
+                    f.seek(write_pos)
+                    f.write(piece.data[data_ptr : data_ptr + to_write])
+            except IOError as e:
+                print(f"Disk write error for {file_path}: {e}")
 
             data_ptr += to_write
             piece_offset += to_write
 
     def _get_file_for_offset(self, global_offset):
-        for f in self.file_handles:
+        for f in self.files_info:
             if f["start"] <= global_offset < f["end"]:
                 return f
         return None
@@ -236,8 +256,3 @@ class PieceManager:
 
     def is_complete(self):
         return len(self.missing_pieces) == 0
-
-    def close_files(self):
-        for f in self.file_handles:
-            if f["handle"]:
-                f["handle"].close()

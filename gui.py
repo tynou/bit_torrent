@@ -192,14 +192,12 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.update_ui)
         self.timer.start(1000)
 
-    @asyncSlot()
-    async def add_torrent_dialog(self):
+    def add_torrent_dialog(self):
         dialog = AddTorrentDialog(self)
         if dialog.exec():
             t_path, dest, mask = dialog.get_data()
             if t_path and mask and any(mask):
-                # Используем await прямо здесь благодаря @asyncSlot
-                await self.client.add_torrent(t_path, dest, mask)
+                asyncio.create_task(self.client.add_torrent(t_path, dest, mask))
 
     @asyncSlot()
     async def pause_selected(self):
@@ -225,19 +223,16 @@ class MainWindow(QMainWindow):
             pm = d.piece_manager
 
             # Name
-            self.table.setItem(i, 0, QTableWidgetItem(d.torrent.name))
+            self._update_table_item(i, 0, d.torrent.name)
 
             # Progress
             progress = 0
             if pm.total_pieces_to_download > 0:
                 needed = pm.total_pieces_to_download
-                # Кол-во нужных, которых нет
                 missing = len(pm.missing_pieces)
-                # Кол-во готовых нужных = всего_нужных - нет_в_наличии
                 done = needed - missing
                 progress = (done / needed) * 100
 
-            # Не пересоздаем виджет, если он уже есть (оптимизация)
             prog_widget = self.table.cellWidget(i, 1)
             if not prog_widget:
                 prog_widget = QProgressBar()
@@ -246,14 +241,24 @@ class MainWindow(QMainWindow):
 
             # Size
             size_str = f"{format_bytes(pm.total_downloaded)} / {format_bytes(d.torrent.total_size)}"
-            self.table.setItem(i, 2, QTableWidgetItem(size_str))
+            self._update_table_item(i, 2, size_str)
 
             # Speed
             speed_str = f"{format_bytes(d.speed)}/s"
-            self.table.setItem(i, 3, QTableWidgetItem(speed_str))
+            self._update_table_item(i, 3, speed_str)
 
             # Status
-            self.table.setItem(i, 4, QTableWidgetItem(d.status.name))
+            self._update_table_item(i, 4, d.status.name)
+
+    def _update_table_item(self, row, col, text):
+        """Вспомогательный метод для обновления ячейки без пересоздания."""
+        item = self.table.item(row, col)
+        if not item:
+            item = QTableWidgetItem(text)
+            self.table.setItem(row, col, item)
+        else:
+            if item.text() != text:
+                item.setText(text)
 
     def closeEvent(self, event):
         """Обработка закрытия окна для корректной остановки."""
